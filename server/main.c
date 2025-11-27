@@ -12,7 +12,7 @@
     -> humidity:    { "current": value, "average": value };
 
  gcc main.c -o main -I/opt/homebrew/include -L/opt/homebrew/lib -lpaho-mqtt3c -ljson-c
-  gcc main.c -o main -lpaho-mqtt3c -ljson-c
+gcc main.c -o main -lpaho-mqtt3cs -ljson-c
 
 
 */
@@ -244,18 +244,26 @@ MQTTClient
 udp_create_mqtt_client (void) {
 
   MQTTClient client;
-  MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
 
   MQTTClient_create(&client, MQTT_URL, MQTT_CLIENTID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
+
+  MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
+  MQTTClient_SSLOptions ssl_opts = MQTTClient_SSLOptions_initializer;
+  ssl_opts.enableServerCertAuth = 1;
+  ssl_opts.trustStore = "./cert.pem";
+
   conn_opts.keepAliveInterval = 20;
   conn_opts.cleansession = 1;
   conn_opts.username = MQTT_USERNAME;
   conn_opts.password = MQTT_PASSWORD;
+  conn_opts.ssl = &ssl_opts;
 
   int rc;
   if ((rc = MQTTClient_connect(client, &conn_opts)) != MQTTCLIENT_SUCCESS) {
     printf("Failed to connect, return code %d\n", rc);
     exit(-1);
+  } else {
+    printf("connectou\n");
   }
 
 //

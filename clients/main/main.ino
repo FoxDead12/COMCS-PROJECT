@@ -1,34 +1,43 @@
 #include <ArduinoJson.h>
+#include <WiFi.h>
 #include <WiFiUdp.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
 #include "DHT.h"
+#include "time.h"
 
 #define WIFI_SSID     "labs"
 #define WIFI_PASSWORD "782edcwq#"
 
-#define UDP_ADDRESS "XXX.XXX.XXX.XXX"
-#define UDP_PORT    9999
+#define UDP_ADDRESS "192.168.1.7"
+#define UDP_PORT    3001
+
+#define MQTT_SERVER   "d36b6378e3fc4b0ca6725112a64d3d59.s1.eu.hivemq.cloud"
+#define MQTT_USERNAME "comcs2425cagg11"
+#define MQTT_PASSWORD "COMCSpassword1."
+#define MQTT_PORT      8883
 
 #define DHTTYPE DHT11
+
+// ... methods defined ...
+void thread_reader(void *pvParameters);
+void trhead_sender();
+void generate_payload();
+void send_udp_message(uint8_t *buffer, int len);
+
+// .. declaration of global variavels ...
 DHT dht(21, DHTTYPE);
-
-void thread_reader (void *pvParameters);
-
 QueueHandle_t queue;
+WiFiUDP udp;
 
-// ... struct of message will be sended ...
-struct sensor {
+// ... struct of sensor data ...
+struct sensor_s {
   float temperature;
   float relativeHumidity;
-};
-
-struct payload {
-  char id[110];
-  char type[30];
-  char location[30];
   char dateObeserved[20];
-  struct sensor s;
 };
 
+// ... method run on start ...
 void setup() {
 
   Serial.begin(9000);
@@ -46,76 +55,96 @@ void setup() {
   dht.begin();
 
   // ... create queue of data shared between threads ...
-  queue = xQueueCreate(10, sizeof(struct sensor));
+  queue = xQueueCreate(10, sizeof(struct sensor_s));
 
+  // ... create thread ...
   xTaskCreatePinnedToCore(
     thread_reader, "thread_reader", 4096, NULL, 2, NULL, NULL   // core 0
   );
 
 }
 
-// ... thread method will run sender ...
 void loop() {
-
-  struct sensor s;
-
-  if ( xQueueReceive(queue, &s, portMAX_DELAY) == pdPASS ) {
-
-
-    Serial.print("Recebi dados: ");
-    Serial.print(s.temperature);
-    Serial.print(" - ");
-    Serial.println(s.relativeHumidity);
-  }
-
+  trhead_sender();
 }
-
-
 
 // ... thread method will run reader ...
 void thread_reader (void *pvParameters) {
 
-  Serial.print("Task 'thread_reader' no core ");
-  Serial.println(xPortGetCoreID());
+  // Serial.print("Task 'thread_reader' running in core ");
+  // Serial.println(xPortGetCoreID());
 
   // ... start time of code running and set 1 seccond for sleep ...
   TickType_t xLastWakeTime = xTaskGetTickCount();
   const TickType_t xFrequency = pdMS_TO_TICKS(1000);
 
-  struct sensor s;
+  struct sensor_s data;
 
   // ... make periodic task ...
   while (true) {
-    Serial.println("Task executada exatamente a cada segundo");
 
-    s.temperature = dht.readTemperature();
-    s.relativeHumidity = dht.readHumidity();
+    // ... get data of sensor ...
+    data.temperature      = dht.readTemperature();
+    data.relativeHumidity = dht.readHumidity();
 
-    Serial.print("Leu ");
-    Serial.print(s.temperature);
-    Serial.print(" - ");
-    Serial.print(s.relativeHumidity);
-    Serial.println("");
+    // ... get time of reading ...
+    struct tm timeinfo;
+    getLocalTime(&timeinfo);
+    strftime(data.dateObeserved, sizeof(data.dateObeserved), "%Y-%m-%dT%H:%M:%S", &timeinfo);
 
-    xQueueSend(queue, &s, portMAX_DELAY);
-
+    // ... store data in queue ...
+    xQueueSend(queue, &data, portMAX_DELAY);
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
+
   }
 
 }
 
-// ... method will generate json to send to UDP and MQTT ...
-void generate_payload_json (struct payload* payload) {
+// ... thread method will run sender ...
+void trhead_sender () {
+  struct sensor_s data;
+
+  if ( xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
+
+    // ... generate message to send ...
+    String output;
+    generate_payload(&data, &output);
+
+    Serial.print("Recebi dados: ");
+    Serial.println(output);
+
+    // ... send message to udp ...
+    send_udp_message(&output, output.length());
+
+  }
+}
+
+// ... create json string to send to servers ...
+void generate_payload ( struct sensor_s *data, String *output ) {
   JsonDocument payload;
+
+  payload["id"] = WiFi.macAddress();
+  payload["type"] = "wheatherObservation";
+  payload["location"] = "Porto";
+  payload["temperature"] = data->temperature;
+  payload["relativeHumidity"] = data->relativeHumidity;
+  payload["dateObeserved"] = data->dateObeserved;
+
+  serializeJson(payload, *output);
+
 }
 
 // ... method to send data to udp server ...
-void udp_send ( char* buffer, int len ) {
+void send_udp_message ( String* buffer, int len ) {
   udp.beginPacket(UDP_ADDRESS, UDP_PORT);
-  udp.write(buffer, len);
+  udp.write((const uint8_t*)buffer->c_str(), len);
   udp.endPacket();
+  // TODO: check if dont return any error try sending message
 }
 
+void send_mqtt_message () {
+
+}
 
 
 

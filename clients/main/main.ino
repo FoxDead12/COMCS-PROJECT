@@ -19,16 +19,58 @@
 
 #define DHTTYPE DHT11
 
+#define TIME_SERVER "pool.ntp.org"
+#define TIME_OFFSET 3600
+
 // ... methods defined ...
 void thread_reader(void *pvParameters);
-void trhead_sender();
+void trhead_sender(void *pvParameters);
 void generate_payload();
-void send_udp_message(uint8_t *buffer, int len);
+void udp_send_message(String *buffer, int len);
+void mqtt_send_message(String* buffer, int len);
+void mqtt_connect();
+
 
 // .. declaration of global variavels ...
 DHT dht(21, DHTTYPE);
 QueueHandle_t queue;
 WiFiUDP udp;
+
+WiFiClientSecure esp_client;
+PubSubClient mqtt(esp_client);
+static const char* certificate = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+)EOF";
 
 // ... struct of sensor data ...
 struct sensor_s {
@@ -40,8 +82,8 @@ struct sensor_s {
 // ... method run on start ...
 void setup() {
 
-  Serial.begin(9000);
-  delay(500);
+  Serial.begin(9600);
+  delay(1000);
 
   // ... init wifi connection ...
   WiFi.mode(WIFI_STA);
@@ -51,6 +93,13 @@ void setup() {
     Serial.print(".");
   }
 
+  // ... set setting to MQTT server ...
+  esp_client.setCACert(certificate);
+  mqtt.setServer(MQTT_SERVER, MQTT_PORT);
+
+  // ... init and get time ...
+  configTime(TIME_OFFSET, TIME_OFFSET, TIME_SERVER);
+
   // ... init sensor ...
   dht.begin();
 
@@ -59,20 +108,20 @@ void setup() {
 
   // ... create thread ...
   xTaskCreatePinnedToCore(
-    thread_reader, "thread_reader", 4096, NULL, 2, NULL, NULL   // core 0
+    thread_reader, "thread_reader", 4096, NULL, 2, NULL, 0   // core 0
+  );
+
+  xTaskCreatePinnedToCore(
+    trhead_sender, "trhead_sender", 8192, NULL, 1, NULL, 1 // core 1
   );
 
 }
 
 void loop() {
-  trhead_sender();
 }
 
 // ... thread method will run reader ...
 void thread_reader (void *pvParameters) {
-
-  // Serial.print("Task 'thread_reader' running in core ");
-  // Serial.println(xPortGetCoreID());
 
   // ... start time of code running and set 1 seccond for sleep ...
   TickType_t xLastWakeTime = xTaskGetTickCount();
@@ -89,11 +138,11 @@ void thread_reader (void *pvParameters) {
 
     // ... get time of reading ...
     struct tm timeinfo;
-    getLocalTime(&timeinfo);
+    getLocalTime(&timeinfo, 200); // timeout is 200ms
     strftime(data.dateObeserved, sizeof(data.dateObeserved), "%Y-%m-%dT%H:%M:%S", &timeinfo);
 
     // ... store data in queue ...
-    xQueueSend(queue, &data, portMAX_DELAY);
+    xQueueSend(queue, &data, 0); // don't block if queue is full
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
 
   }
@@ -101,21 +150,26 @@ void thread_reader (void *pvParameters) {
 }
 
 // ... thread method will run sender ...
-void trhead_sender () {
+void trhead_sender (void *pvParameters) {
   struct sensor_s data;
 
-  if ( xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
+  while (true) {
+    if ( xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
 
-    // ... generate message to send ...
-    String output;
-    generate_payload(&data, &output);
+      // ... generate message to send ...
+      String output;
+      generate_payload(&data, &output);
 
-    Serial.print("Recebi dados: ");
-    Serial.println(output);
+      // ... send message to udp ...
+      udp_send_message(&output, output.length());
 
-    // ... send message to udp ...
-    send_udp_message(&output, output.length());
+      // ... send message to mqtt ...
+      mqtt_send_message(&output, output.length());
 
+      // UBaseType_t freeStack = uxTaskGetStackHighWaterMark(NULL);
+      // Serial.print("Stack livre: ");
+      // Serial.println(freeStack);
+    }
   }
 }
 
@@ -135,17 +189,48 @@ void generate_payload ( struct sensor_s *data, String *output ) {
 }
 
 // ... method to send data to udp server ...
-void send_udp_message ( String* buffer, int len ) {
+void udp_send_message ( String* buffer, int len ) {
   udp.beginPacket(UDP_ADDRESS, UDP_PORT);
   udp.write((const uint8_t*)buffer->c_str(), len);
   udp.endPacket();
   // TODO: check if dont return any error try sending message
 }
 
-void send_mqtt_message () {
+// ... method to send message to mqtt server ...
+void mqtt_send_message (String* buffer, int len) {
+
+  if ( !mqtt.connected() ) {
+    mqtt_connect();
+  }
+
+  if ( !mqtt.publish("/messages", buffer->c_str(), true) ) {
+    // ... error sendind message ...
+  }
 
 }
 
+// ... method to connect to mqtt server ...
+void mqtt_connect () {
+
+  while ( !mqtt.connected() ) {
+
+    // ... use mac address to mqtt ...
+    String client_id = WiFi.macAddress();
+
+    // ... connect to mqtt server ...
+    if ( mqtt.connect(client_id.c_str(), MQTT_USERNAME, MQTT_PASSWORD) ) {
+      // ... set chanel to mqtt server ...
+      mqtt.subscribe("/messages");
+    } else {
+      Serial.print("failed connect to mqtt, rc=");
+      Serial.println(mqtt.state());
+    }
+
+  }
+
+}
+
+// ... store error in file ...
 
 
 

@@ -11,7 +11,7 @@
     -> temperature: { "current": value, "average": value };
     -> humidity:    { "current": value, "average": value };
 
- gcc main.c -o main -I/opt/homebrew/include -L/opt/homebrew/lib -lpaho-mqtt3c -ljson-c
+ gcc main.c -o main -I/opt/homebrew/include -L/opt/homebrew/lib -lpaho-mqtt3cs -ljson-c
 gcc main.c -o main -lpaho-mqtt3cs -ljson-c
 
 

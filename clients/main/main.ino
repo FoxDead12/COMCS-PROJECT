@@ -22,22 +22,37 @@
 #define TIME_SERVER "pool.ntp.org"
 #define TIME_OFFSET 3600
 
+#define FILE_NAME_ERR "/messages-not-send.txt"
+#define FILE_ARRAY_SIZE 10
+
 // ... methods defined ...
 void thread_reader(void *pvParameters);
 void trhead_sender(void *pvParameters);
+
 void generate_payload();
+
 void udp_send_message(String *buffer, int len);
-void mqtt_send_message(String* buffer, int len);
+
+void mqtt_send_message(String* buffer, struct sensor_s *data);
 void mqtt_connect();
+
+void spiffs_write_file(struct sensor_s *data);
+void spiffs_read_file();
+void spiffs_open_file();
 
 
 // .. declaration of global variavels ...
 DHT dht(21, DHTTYPE);
-QueueHandle_t queue;
-WiFiUDP udp;
 
+QueueHandle_t queue;
+
+File file;
+WiFiUDP udp;
 WiFiClientSecure esp_client;
 PubSubClient mqtt(esp_client);
+
+int error_current_idx = 0;
+
 static const char* certificate = R"EOF(
 -----BEGIN CERTIFICATE-----
 MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
@@ -106,6 +121,9 @@ void setup() {
   // ... create queue of data shared between threads ...
   queue = xQueueCreate(10, sizeof(struct sensor_s));
 
+  // ... init SPIFFS (file server) ...
+  SPIFFS.begin(true);
+
   // ... create thread ...
   xTaskCreatePinnedToCore(
     thread_reader, "thread_reader", 4096, NULL, 2, NULL, 0   // core 0
@@ -164,11 +182,11 @@ void trhead_sender (void *pvParameters) {
       udp_send_message(&output, output.length());
 
       // ... send message to mqtt ...
-      mqtt_send_message(&output, output.length());
+      mqtt_send_message(&output, &data);
 
-      // UBaseType_t freeStack = uxTaskGetStackHighWaterMark(NULL);
-      // Serial.print("Stack livre: ");
-      // Serial.println(freeStack);
+      spiffs_read_file();
+      spiffs_write_file(&data);
+
     }
   }
 }
@@ -197,7 +215,7 @@ void udp_send_message ( String* buffer, int len ) {
 }
 
 // ... method to send message to mqtt server ...
-void mqtt_send_message (String* buffer, int len) {
+void mqtt_send_message (String* buffer, struct sensor_s *data) {
 
   if ( !mqtt.connected() ) {
     mqtt_connect();
@@ -211,27 +229,78 @@ void mqtt_send_message (String* buffer, int len) {
 
 // ... method to connect to mqtt server ...
 void mqtt_connect () {
-
   while ( !mqtt.connected() ) {
-
     // ... use mac address to mqtt ...
     String client_id = WiFi.macAddress();
 
     // ... connect to mqtt server ...
     if ( mqtt.connect(client_id.c_str(), MQTT_USERNAME, MQTT_PASSWORD) ) {
-      // ... set chanel to mqtt server ...
-      mqtt.subscribe("/messages");
+      // ... set chanel to mqtt server using QoS 1 ...
+      mqtt.subscribe("/messages", 1);
     } else {
+      // ... error connection, try again ...
       Serial.print("failed connect to mqtt, rc=");
       Serial.println(mqtt.state());
     }
-
   }
-
 }
 
 // ... store error in file ...
+void spiffs_write_file (struct sensor_s *data) {
 
+  // ... open file ...
+  spiffs_open_file();
+
+  Serial.print("Vai escrever na posicao: ");
+  Serial.println(error_current_idx);
+
+  // ... write in file in specific position ...
+  file.seek(error_current_idx * sizeof(struct sensor_s), SeekSet);
+  file.write((uint8_t*) data, sizeof(struct sensor_s));
+
+  // ... increase value ...
+  error_current_idx += 1;
+
+  // ... rolback ...
+  if (error_current_idx >= FILE_ARRAY_SIZE) {
+    error_current_idx = 0;
+  }
+
+  file.close();
+
+}
+
+void spiffs_read_file () {
+
+  // ... open file ...
+  spiffs_open_file();
+
+  Serial.print("--- READING DATA ----\n");
+  for (int i = 0; i < FILE_ARRAY_SIZE; i++) {
+    struct sensor_s sensor;
+    file.read((uint8_t*) &sensor, sizeof(struct sensor_s));
+    Serial.printf("file: temperature: %f relativeHumidity: %f dateObeserved: %s\n", sensor.temperature, sensor.relativeHumidity, sensor.dateObeserved);
+  }
+
+  file.close();
+
+}
+
+void spiffs_open_file () {
+
+  // ... allocate file ...
+  if ( !SPIFFS.exists(FILE_NAME_ERR) ) {
+    file = SPIFFS.open(FILE_NAME_ERR, "w+");
+    for (int i = 0; i < FILE_ARRAY_SIZE; i++) {
+      struct sensor_s sensor;
+      file.write((const uint8_t*) &sensor, sizeof(struct sensor_s));
+    }
+    file.close();
+  }
+
+  file = SPIFFS.open(FILE_NAME_ERR, "r+");
+
+}
 
 
 // #include <WiFi.h>

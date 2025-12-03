@@ -32,12 +32,12 @@ void trhead_sender(void *pvParameters);
 
 void generate_payload();
 
-void udp_send_message(String *buffer, int len);
+int udp_send_message(String *buffer, int len);
 
 void mqtt_send_message(String* buffer, struct sensor_s *data);
 void mqtt_connect();
 
-void spiffs_write_file(struct sensor_s *data);
+void spiffs_write_file(struct sensor_s data);
 void spiffs_read_file();
 void spiffs_open_file();
 
@@ -98,7 +98,7 @@ struct sensor_s {
 // ... method run on start ...
 void setup() {
 
-  Serial.begin(9600);
+  Serial.begin(19200);
   delay(1000);
 
   // ... init wifi connection ...
@@ -172,21 +172,26 @@ void thread_reader (void *pvParameters) {
 void trhead_sender (void *pvParameters) {
   struct sensor_s data;
 
+  int log_size = 2;
+  int logIndex = 0;
+
   while (true) {
     if ( xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
+
+      Serial.println("NEW MESSAGE");
 
       // ... generate message to send ...
       String output;
       generate_payload(&data, &output);
 
       // ... send message to udp ...
-      udp_send_message(&output, output.length());
+      if ( udp_send_message(&output, output.length()) == 1 ) {
+        // ... error send udp message ...
+        spiffs_write_file(data);
+      }
 
       // ... send message to mqtt ...
       mqtt_send_message(&output, &data);
-
-      spiffs_read_file();
-      spiffs_write_file(&data);
 
     }
   }
@@ -208,11 +213,26 @@ void generate_payload ( struct sensor_s *data, String *output ) {
 }
 
 // ... method to send data to udp server ...
-void udp_send_message ( String* buffer, int len ) {
-  udp.beginPacket(UDP_ADDRESS, UDP_PORT);
-  udp.write((const uint8_t*)buffer->c_str(), len);
-  udp.endPacket();
-  // TODO: check if dont return any error try sending message
+int udp_send_message ( String* buffer, int len ) {
+
+  if ( !udp.beginPacket(UDP_ADDRESS, UDP_PORT) ) {
+    Serial.println("[UDP] ERRO: beginPacket falhou");
+    return 1;
+  }
+
+  int bytes = udp.write((const uint8_t*)buffer->c_str(), len);
+  if (bytes != len) {
+    Serial.printf("[UDP] ERRO: udp.write escreveu %d bytes, mas esperado %d\n", bytes, len);
+    return 1;
+  }
+
+  if ( udp.endPacket() == 0 ) {
+    Serial.println("[UDP] ERRO: endPacket falhou! Pacote não enviado.");
+    return 1;
+  }
+
+  return 0;
+
 }
 
 // ... method to send message to mqtt server ...
@@ -246,18 +266,15 @@ void mqtt_connect () {
   }
 }
 
-// ... store error in file ...
-void spiffs_write_file (struct sensor_s *data) {
+// ... write struct in file ...
+void spiffs_write_file (struct sensor_s data) {
 
   // ... open file ...
   spiffs_open_file();
 
-  Serial.print("Vai escrever na posicao: ");
-  Serial.println(error_current_idx);
-
   // ... write in file in specific position ...
-  file.seek(error_current_idx * sizeof(struct sensor_s), SeekSet);
-  file.write((uint8_t*) data, sizeof(struct sensor_s));
+  file.seek(error_current_idx * sizeof(data), SeekSet);
+  file.write((uint8_t*) &data, sizeof(data));
 
   // ... increase value ...
   error_current_idx += 1;
@@ -271,17 +288,16 @@ void spiffs_write_file (struct sensor_s *data) {
 
 }
 
+// ... read struct from file ...
 void spiffs_read_file () {
 
   // ... open file ...
   spiffs_open_file();
 
-  Serial.print("--- READING DATA ----\n");
-  for (int i = 0; i < FILE_ARRAY_SIZE; i++) {
-    struct sensor_s sensor;
-    file.read((uint8_t*) &sensor, sizeof(struct sensor_s));
-    Serial.printf("file: temperature: %f relativeHumidity: %f dateObeserved: %s\n", sensor.temperature, sensor.relativeHumidity, sensor.dateObeserved);
-  }
+  // ... read struct from position ...
+  struct sensor_s sensor = {};
+  file.seek(sizeof(struct sensor_s), SeekSet);
+  file.read((uint8_t*) &sensor, sizeof(sensor));
 
   file.close();
 
@@ -293,7 +309,7 @@ void spiffs_open_file () {
   if ( !SPIFFS.exists(FILE_NAME_ERR) ) {
     file = SPIFFS.open(FILE_NAME_ERR, "w+");
     for (int i = 0; i < FILE_ARRAY_SIZE; i++) {
-      struct sensor_s sensor;
+      struct sensor_s sensor = {};
       file.write((const uint8_t*) &sensor, sizeof(struct sensor_s));
     }
     file.close();

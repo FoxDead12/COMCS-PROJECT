@@ -4,13 +4,14 @@
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include "SPIFFS.h"
+#include "FS.h"
 #include "DHT.h"
 #include "time.h"
 
-#define WIFI_SSID     "labs"
-#define WIFI_PASSWORD "782edcwq#"
+#define WIFI_SSID     "S24 Ultra de David"
+#define WIFI_PASSWORD "ola12345"
 
-#define UDP_ADDRESS "192.168.1.7"
+#define UDP_ADDRESS "10.72.138.100"
 #define UDP_PORT    3001
 
 #define MQTT_SERVER   "d36b6378e3fc4b0ca6725112a64d3d59.s1.eu.hivemq.cloud"
@@ -30,11 +31,11 @@
 void thread_reader(void *pvParameters);
 void trhead_sender(void *pvParameters);
 
-void generate_payload();
+void generate_payload ( struct sensor_s *data, String *output );
 
 int udp_send_message(String *buffer, int len);
 
-void mqtt_send_message(String* buffer, struct sensor_s *data);
+int mqtt_send_message(String* buffer, struct sensor_s *data);
 void mqtt_connect();
 
 void spiffs_write_file(struct sensor_s data);
@@ -125,13 +126,15 @@ void setup() {
   // ... init SPIFFS (file server) ...
   SPIFFS.begin(true);
 
+  randomSeed(micros());
+
   // ... create thread ...
   xTaskCreatePinnedToCore(
-    thread_reader, "thread_reader", 4096, NULL, 2, NULL, 0   // core 0
+    thread_reader, "thread_reader", 2048, NULL, 2, NULL, NULL   // core 0
   );
 
   xTaskCreatePinnedToCore(
-    trhead_sender, "trhead_sender", 8192, NULL, 1, NULL, 1 // core 1
+    trhead_sender, "trhead_sender", 4096, NULL, 1, NULL, NULL // core 1
   );
 
 }
@@ -150,6 +153,8 @@ void thread_reader (void *pvParameters) {
 
   // ... make periodic task ...
   while (true) {
+
+    Serial.println("A LER");
 
     // ... get data of sensor ...
     data.temperature      = dht.readTemperature();
@@ -170,29 +175,36 @@ void thread_reader (void *pvParameters) {
 
 // ... thread method will run sender ...
 void trhead_sender (void *pvParameters) {
-  struct sensor_s data;
 
-  int log_size = 2;
-  int logIndex = 0;
+  struct sensor_s data;
 
   while (true) {
     if ( xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
 
-      Serial.println("NEW MESSAGE");
+      Serial.println("ENTREI AQUI");
 
       // ... generate message to send ...
       String output;
       generate_payload(&data, &output);
 
+      int error = 0;
+
       // ... send message to udp ...
       if ( udp_send_message(&output, output.length()) == 1 ) {
         // ... error send udp message ...
+        Serial.println("ERROR UDP, WRITE IN FILE");
         spiffs_write_file(data);
+        error = 1;
       }
 
       // ... send message to mqtt ...
-      mqtt_send_message(&output, &data);
+      if ( mqtt_send_message(&output, &data) == 1 && error == 0) {
+        Serial.println("ERROR MQTT, WRITE IN FILE");
+        spiffs_write_file(data);
+      }
 
+      Serial.print("Heap free: "); Serial.println(ESP.getFreeHeap());
+      Serial.print("Max block: "); Serial.println(ESP.getMaxAllocHeap());
     }
   }
 }
@@ -206,7 +218,7 @@ void generate_payload ( struct sensor_s *data, String *output ) {
   payload["location"] = "Porto";
   payload["temperature"] = data->temperature;
   payload["relativeHumidity"] = data->relativeHumidity;
-  payload["dateObeserved"] = data->dateObeserved;
+  payload["dateObserved"] = data->dateObeserved;
 
   serializeJson(payload, *output);
 
@@ -215,12 +227,16 @@ void generate_payload ( struct sensor_s *data, String *output ) {
 // ... method to send data to udp server ...
 int udp_send_message ( String* buffer, int len ) {
 
+  Serial.print("SENDING JSON IN UDP: ");
+  Serial.printf("%s", buffer->c_str());
+  Serial.println("");
+
   if ( !udp.beginPacket(UDP_ADDRESS, UDP_PORT) ) {
     Serial.println("[UDP] ERRO: beginPacket falhou");
     return 1;
   }
 
-  int bytes = udp.write((const uint8_t*)buffer->c_str(), len);
+  int bytes = udp.write((const uint8_t*) buffer->c_str(), len);
   if (bytes != len) {
     Serial.printf("[UDP] ERRO: udp.write escreveu %d bytes, mas esperado %d\n", bytes, len);
     return 1;
@@ -236,7 +252,11 @@ int udp_send_message ( String* buffer, int len ) {
 }
 
 // ... method to send message to mqtt server ...
-void mqtt_send_message (String* buffer, struct sensor_s *data) {
+int mqtt_send_message (String* buffer, struct sensor_s *data) {
+
+  Serial.print("SENDING JSON IN MQTT: ");
+  Serial.printf("%s", buffer->c_str());
+  Serial.println("");
 
   if ( !mqtt.connected() ) {
     mqtt_connect();
@@ -244,7 +264,10 @@ void mqtt_send_message (String* buffer, struct sensor_s *data) {
 
   if ( !mqtt.publish("/messages", buffer->c_str(), true) ) {
     // ... error sendind message ...
+    return 1;
   }
+
+  return 0;
 
 }
 
@@ -253,9 +276,13 @@ void mqtt_connect () {
   while ( !mqtt.connected() ) {
     // ... use mac address to mqtt ...
     String client_id = WiFi.macAddress();
+    client_id += String(random(0xffff), HEX);
+
+    Serial.println("VOU CONECTAR MQTT");
 
     // ... connect to mqtt server ...
     if ( mqtt.connect(client_id.c_str(), MQTT_USERNAME, MQTT_PASSWORD) ) {
+      Serial.println("CONECTOU AO MQTT");
       // ... set chanel to mqtt server using QoS 1 ...
       mqtt.subscribe("/messages", 1);
     } else {

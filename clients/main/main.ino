@@ -3,6 +3,7 @@
 #include <WiFiUdp.h>
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
+#include "SPIFFS.h"
 #include "DHT.h"
 #include "time.h"
 

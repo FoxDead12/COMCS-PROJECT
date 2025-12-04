@@ -174,10 +174,20 @@ void thread_reader (void *pvParameters) {
 // ... thread method will run sender ...
 void trhead_sender (void *pvParameters) {
 
-  struct sensor_s data;
 
   while (true) {
-    if ( spiffs_read_file(&data) == 0 || xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
+    struct sensor_s data = {0};
+    bool got_data = false; 
+
+    if ( xQueueReceive(queue, &data, pdMS_TO_TICKS(50)) == pdPASS ) {
+      got_data = true;
+    } else if ( spiffs_read_file(&data) == 0 ) {
+      got_data = true;
+    } else if ( xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
+      got_data = true;
+    }
+
+    if ( got_data == true ) {
 
       // ... logic to dont write same message when errors append ...
       int error = 0;
@@ -201,7 +211,8 @@ void trhead_sender (void *pvParameters) {
         spiffs_write_file(data);
       }
 
-    }
+    } 
+
   }
 }
 
@@ -333,7 +344,7 @@ int spiffs_read_file (struct sensor_s *sensor) {
 
     // ... make index go to first index ...
     idx++;
-    if (err_write_idx >= FILE_ARRAY_SIZE) {
+    if (idx >= FILE_ARRAY_SIZE) {
       idx = 0;
     }
 

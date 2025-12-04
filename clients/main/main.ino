@@ -306,6 +306,8 @@ void spiffs_write_file (struct sensor_s data) {
 // ... read struct from file ...
 int spiffs_read_file (struct sensor_s *sensor) {
 
+  Serial.println("LER FICHEIRO ....");
+
   // ... open file ...
   spiffs_open_file();
 
@@ -324,6 +326,7 @@ int spiffs_read_file (struct sensor_s *sensor) {
       // ... empty data of file ...
       file.seek(idx * sizeof(struct sensor_s), SeekSet);
       file.write((uint8_t*)&empty, sizeof(struct sensor_s));
+      Serial.println("DATA READ");
       return 0;
     }
 

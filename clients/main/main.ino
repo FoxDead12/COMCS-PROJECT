@@ -39,7 +39,7 @@ int mqtt_send_message(String* buffer, struct sensor_s *data);
 void mqtt_connect();
 
 void spiffs_write_file(struct sensor_s data);
-void spiffs_read_file();
+void spiffs_read_file(struct sensor_s *sensor);
 void spiffs_open_file();
 
 
@@ -53,7 +53,8 @@ WiFiUDP udp;
 WiFiClientSecure esp_client;
 PubSubClient mqtt(esp_client);
 
-int error_current_idx = 0;
+int err_write_idx = 0;
+int err_read_idx = 0;
 
 static const char* certificate = R"EOF(
 -----BEGIN CERTIFICATE-----
@@ -181,30 +182,36 @@ void trhead_sender (void *pvParameters) {
   while (true) {
     if ( xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
 
-      Serial.println("ENTREI AQUI");
+      spiffs_read_file(&data);
 
-      // ... generate message to send ...
-      String output;
-      generate_payload(&data, &output);
+      Serial.print("read: ");
+      Serial.print(data.temperature);
+      Serial.print("");
+      Serial.print(data.relativeHumidity);
+      Serial.print("");
+      Serial.println(data.dateObeserved);
 
-      int error = 0;
+//
+//       // ... logic to dont write same message when errors append ...
+//       int error = 0;
+//
+//       // ... generate message to send ...
+//       String output;
+//       generate_payload(&data, &output);
+//
+//
+//       // ... send message to udp ...
+//       if ( udp_send_message(&output, output.length()) == 1 ) {
+//         // ... error send udp message ...
+//         spiffs_write_file(data);
+//         error = 1;
+//       }
+//
+//       // ... send message to mqtt ...
+//       if ( mqtt_send_message(&output, &data) == 1 && error == 0) {
+//         spiffs_write_file(data);
+//       }
 
-      // ... send message to udp ...
-      if ( udp_send_message(&output, output.length()) == 1 ) {
-        // ... error send udp message ...
-        Serial.println("ERROR UDP, WRITE IN FILE");
-        spiffs_write_file(data);
-        error = 1;
-      }
-
-      // ... send message to mqtt ...
-      if ( mqtt_send_message(&output, &data) == 1 && error == 0) {
-        Serial.println("ERROR MQTT, WRITE IN FILE");
-        spiffs_write_file(data);
-      }
-
-      Serial.print("Heap free: "); Serial.println(ESP.getFreeHeap());
-      Serial.print("Max block: "); Serial.println(ESP.getMaxAllocHeap());
     }
   }
 }
@@ -278,11 +285,8 @@ void mqtt_connect () {
     String client_id = WiFi.macAddress();
     client_id += String(random(0xffff), HEX);
 
-    Serial.println("VOU CONECTAR MQTT");
-
     // ... connect to mqtt server ...
     if ( mqtt.connect(client_id.c_str(), MQTT_USERNAME, MQTT_PASSWORD) ) {
-      Serial.println("CONECTOU AO MQTT");
       // ... set chanel to mqtt server using QoS 1 ...
       mqtt.subscribe("/messages", 1);
     } else {
@@ -300,15 +304,15 @@ void spiffs_write_file (struct sensor_s data) {
   spiffs_open_file();
 
   // ... write in file in specific position ...
-  file.seek(error_current_idx * sizeof(data), SeekSet);
+  file.seek(err_write_idx * sizeof(data), SeekSet);
   file.write((uint8_t*) &data, sizeof(data));
 
   // ... increase value ...
-  error_current_idx += 1;
+  err_write_idx += 1;
 
   // ... rolback ...
-  if (error_current_idx >= FILE_ARRAY_SIZE) {
-    error_current_idx = 0;
+  if (err_write_idx >= FILE_ARRAY_SIZE) {
+    err_write_idx = 0;
   }
 
   file.close();
@@ -316,15 +320,68 @@ void spiffs_write_file (struct sensor_s data) {
 }
 
 // ... read struct from file ...
-void spiffs_read_file () {
+void spiffs_read_file (struct sensor_s *sensor) {
 
   // ... open file ...
   spiffs_open_file();
 
+  // ... finding struct in file ...
+  int finding_struct = 1;
+  int idx = err_write_idx + 1;
+  int i = 0;
+  while ( finding_struct == 1 ) {
+
+    Serial.println("A procura de dados");
+
+    file.seek(idx * sizeof(struct sensor_s), SeekSet);
+    file.read((uint8_t*) sensor, sizeof(struct sensor_s));
+
+    struct sensor_s e = {0};
+    bool is_empty = (memcmp(sensor, &e, sizeof(struct sensor_s)) == 0);
+
+    if ( is_empty == false ) {
+      Serial.println("Estrutura de dados encontrada");
+      file.seek(err_read_idx * sizeof(struct sensor_s), SeekSet);
+      file.write((uint8_t*)&empty, sizeof(struct sensor_s));
+      finding_struct = 0;
+      break;
+    } else {
+      Serial.println("Estrutura de dados FUCKEDDDDD");
+    }
+
+    i++;
+    idx += 1;
+
+    if (idx >= FILE_ARRAY_SIZE) {
+      idx = 0;
+    }
+
+    if (i >= FILE_ARRAY_SIZE) {
+      break;
+    }
+
+
+  }
+
+
   // ... read struct from position ...
-  struct sensor_s sensor = {};
-  file.seek(sizeof(struct sensor_s), SeekSet);
-  file.read((uint8_t*) &sensor, sizeof(sensor));
+  file.seek(err_read_idx * sizeof(struct sensor_s), SeekSet);
+  file.read((uint8_t*) sensor, sizeof(struct sensor_s));
+
+  // ... create emepty struct ...
+  struct sensor_s empty;
+  memset(&empty, 0, sizeof(struct sensor_s));
+
+  // ... reset struct readed ...
+  file.seek(err_read_idx * sizeof(struct sensor_s), SeekSet);
+  file.write((uint8_t*)&empty, sizeof(struct sensor_s));
+
+  err_read_idx += 1;
+
+  // ... rolback ...
+  if (err_read_idx >= FILE_ARRAY_SIZE) {
+    err_read_idx = 0;
+  }
 
   file.close();
 
@@ -336,7 +393,8 @@ void spiffs_open_file () {
   if ( !SPIFFS.exists(FILE_NAME_ERR) ) {
     file = SPIFFS.open(FILE_NAME_ERR, "w+");
     for (int i = 0; i < FILE_ARRAY_SIZE; i++) {
-      struct sensor_s sensor = {};
+      struct sensor_s sensor;
+      memset(&sensor, 0, sizeof(struct sensor_s));
       file.write((const uint8_t*) &sensor, sizeof(struct sensor_s));
     }
     file.close();

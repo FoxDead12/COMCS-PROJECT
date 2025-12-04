@@ -6,10 +6,6 @@
     -> Best QoS in UDP communications
     -> Ability responde multi clients
 
- Client UPD request body:
-    -> temperature: { "current": value, "average": value };
-    -> humidity:    { "current": value, "average": value };
-
  gcc main.c -o main -I/opt/homebrew/include -L/opt/homebrew/lib -lpaho-mqtt3cs
 -ljson-c
 
@@ -312,8 +308,6 @@ void process_readings(struct udp_datagram *data, MQTTClient client) {
   clients[idx].last_temp = data->temperature;
   clients[idx].last_hum = data->relative_humidity;
   clients[idx].last_seen = now;
-
-  char alert_msg[512];
 
   for (int i = 0; i < MAX_CLIENTS; i++) {
     if (i == idx || !clients[i].active)

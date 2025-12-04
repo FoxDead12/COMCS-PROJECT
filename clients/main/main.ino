@@ -31,7 +31,7 @@
 void thread_reader(void *pvParameters);
 void trhead_sender(void *pvParameters);
 
-void generate_payload ( struct sensor_s *data, String *output );
+void generate_payload(struct sensor_s *data, String *output);
 
 int udp_send_message(String *buffer, int len);
 
@@ -39,7 +39,7 @@ int mqtt_send_message(String* buffer, struct sensor_s *data);
 void mqtt_connect();
 
 void spiffs_write_file(struct sensor_s data);
-void spiffs_read_file(struct sensor_s *sensor);
+int spiffs_read_file(struct sensor_s *sensor);
 void spiffs_open_file();
 
 
@@ -54,7 +54,6 @@ WiFiClientSecure esp_client;
 PubSubClient mqtt(esp_client);
 
 int err_write_idx = 0;
-int err_read_idx = 0;
 
 static const char* certificate = R"EOF(
 -----BEGIN CERTIFICATE-----
@@ -127,8 +126,6 @@ void setup() {
   // ... init SPIFFS (file server) ...
   SPIFFS.begin(true);
 
-  randomSeed(micros());
-
   // ... create thread ...
   xTaskCreatePinnedToCore(
     thread_reader, "thread_reader", 2048, NULL, 2, NULL, NULL   // core 0
@@ -155,8 +152,6 @@ void thread_reader (void *pvParameters) {
   // ... make periodic task ...
   while (true) {
 
-    Serial.println("A LER");
-
     // ... get data of sensor ...
     data.temperature      = dht.readTemperature();
     data.relativeHumidity = dht.readHumidity();
@@ -180,37 +175,29 @@ void trhead_sender (void *pvParameters) {
   struct sensor_s data;
 
   while (true) {
-    if ( xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
+    if ( spiffs_read_file(&data) == 0 || xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
 
-      spiffs_read_file(&data);
+      // ... logic to dont write same message when errors append ...
+      int error = 0;
 
-      Serial.print("read: ");
-      Serial.print(data.temperature);
-      Serial.print("");
-      Serial.print(data.relativeHumidity);
-      Serial.print("");
-      Serial.println(data.dateObeserved);
+      // ... generate message to send ...
+      String output;
+      generate_payload(&data, &output);
 
-//
-//       // ... logic to dont write same message when errors append ...
-//       int error = 0;
-//
-//       // ... generate message to send ...
-//       String output;
-//       generate_payload(&data, &output);
-//
-//
-//       // ... send message to udp ...
-//       if ( udp_send_message(&output, output.length()) == 1 ) {
-//         // ... error send udp message ...
-//         spiffs_write_file(data);
-//         error = 1;
-//       }
-//
-//       // ... send message to mqtt ...
-//       if ( mqtt_send_message(&output, &data) == 1 && error == 0) {
-//         spiffs_write_file(data);
-//       }
+      // ... log message
+      Serial.print("json: "); Serial.printf("%s", output.c_str()); Serial.println("");
+
+      // ... send message to udp ...
+      if ( udp_send_message(&output, output.length()) == 1 ) {
+        // ... error send udp message ...
+        spiffs_write_file(data);
+        error = 1;
+      }
+
+      // ... send message to mqtt ...
+      if ( mqtt_send_message(&output, &data) == 1 && error == 0) {
+        spiffs_write_file(data);
+      }
 
     }
   }
@@ -233,10 +220,6 @@ void generate_payload ( struct sensor_s *data, String *output ) {
 
 // ... method to send data to udp server ...
 int udp_send_message ( String* buffer, int len ) {
-
-  Serial.print("SENDING JSON IN UDP: ");
-  Serial.printf("%s", buffer->c_str());
-  Serial.println("");
 
   if ( !udp.beginPacket(UDP_ADDRESS, UDP_PORT) ) {
     Serial.println("[UDP] ERRO: beginPacket falhou");
@@ -261,9 +244,9 @@ int udp_send_message ( String* buffer, int len ) {
 // ... method to send message to mqtt server ...
 int mqtt_send_message (String* buffer, struct sensor_s *data) {
 
-  Serial.print("SENDING JSON IN MQTT: ");
-  Serial.printf("%s", buffer->c_str());
-  Serial.println("");
+  if (WiFi.status() != WL_CONNECTED) {
+    return 1;
+  }
 
   if ( !mqtt.connected() ) {
     mqtt_connect();
@@ -280,11 +263,11 @@ int mqtt_send_message (String* buffer, struct sensor_s *data) {
 
 // ... method to connect to mqtt server ...
 void mqtt_connect () {
-  while ( !mqtt.connected() ) {
-    // ... use mac address to mqtt ...
-    String client_id = WiFi.macAddress();
-    client_id += String(random(0xffff), HEX);
 
+  // ... use mac address to mqtt ...
+  String client_id = WiFi.macAddress();
+
+  while ( !mqtt.connected() ) {
     // ... connect to mqtt server ...
     if ( mqtt.connect(client_id.c_str(), MQTT_USERNAME, MQTT_PASSWORD) ) {
       // ... set chanel to mqtt server using QoS 1 ...
@@ -295,6 +278,7 @@ void mqtt_connect () {
       Serial.println(mqtt.state());
     }
   }
+
 }
 
 // ... write struct in file ...
@@ -320,70 +304,39 @@ void spiffs_write_file (struct sensor_s data) {
 }
 
 // ... read struct from file ...
-void spiffs_read_file (struct sensor_s *sensor) {
+int spiffs_read_file (struct sensor_s *sensor) {
 
   // ... open file ...
   spiffs_open_file();
 
-  // ... finding struct in file ...
-  int finding_struct = 1;
-  int idx = err_write_idx + 1;
-  int i = 0;
-  while ( finding_struct == 1 ) {
+  struct sensor_s empty = {0};
+  int max_iterations = FILE_ARRAY_SIZE;
+  int idx = err_write_idx;
 
-    Serial.println("A procura de dados");
+  for (int i = 0; i < FILE_ARRAY_SIZE; i++) {
 
+    // ... read data from file ...
     file.seek(idx * sizeof(struct sensor_s), SeekSet);
     file.read((uint8_t*) sensor, sizeof(struct sensor_s));
 
-    struct sensor_s e = {0};
-    bool is_empty = (memcmp(sensor, &e, sizeof(struct sensor_s)) == 0);
-
-    if ( is_empty == false ) {
-      Serial.println("Estrutura de dados encontrada");
-      file.seek(err_read_idx * sizeof(struct sensor_s), SeekSet);
+    // ... check if buffer readed has data or is null ...
+    if ( memcmp(sensor, &empty, sizeof(struct sensor_s)) != 0 ) {
+      // ... empty data of file ...
+      file.seek(idx * sizeof(struct sensor_s), SeekSet);
       file.write((uint8_t*)&empty, sizeof(struct sensor_s));
-      finding_struct = 0;
-      break;
-    } else {
-      Serial.println("Estrutura de dados FUCKEDDDDD");
+      return 0;
     }
 
-    i++;
-    idx += 1;
-
-    if (idx >= FILE_ARRAY_SIZE) {
+    // ... make index go to first index ...
+    idx++;
+    if (err_write_idx >= FILE_ARRAY_SIZE) {
       idx = 0;
     }
 
-    if (i >= FILE_ARRAY_SIZE) {
-      break;
-    }
-
-
-  }
-
-
-  // ... read struct from position ...
-  file.seek(err_read_idx * sizeof(struct sensor_s), SeekSet);
-  file.read((uint8_t*) sensor, sizeof(struct sensor_s));
-
-  // ... create emepty struct ...
-  struct sensor_s empty;
-  memset(&empty, 0, sizeof(struct sensor_s));
-
-  // ... reset struct readed ...
-  file.seek(err_read_idx * sizeof(struct sensor_s), SeekSet);
-  file.write((uint8_t*)&empty, sizeof(struct sensor_s));
-
-  err_read_idx += 1;
-
-  // ... rolback ...
-  if (err_read_idx >= FILE_ARRAY_SIZE) {
-    err_read_idx = 0;
   }
 
   file.close();
+  return 1;
 
 }
 
@@ -403,149 +356,3 @@ void spiffs_open_file () {
   file = SPIFFS.open(FILE_NAME_ERR, "r+");
 
 }
-
-
-// #include <WiFi.h>
-// #include <WiFiClientSecure.h>
-// #include <PubSubClient.h>
-// #include <ArduinoJson.h>
-// #include "DHT.h"
-// #include "time.h"
-//
-//
-// // ... wifi connections props ...
-// #define WIFI_SSID     "labs"
-// #define WIFI_PASSWORD "782edcwq#"
-//
-// // ... mqtt server connection props ...
-// #define MQTT_SERVER   "d36b6378e3fc4b0ca6725112a64d3d59.s1.eu.hivemq.cloud"
-// #define MQTT_USERNAME "comcs2425cagg11"
-// #define MQTT_PASSWORD "COMCSpassword1."
-// #define MQTT_PORT      8883
-//
-// // ... define the type of sensor using ...
-// #define DHTTYPE DHT11
-//
-//
-// DHT dht(21, DHTTYPE);
-// WiFiClientSecure esp_client;
-// PubSubClient mqtt_client(esp_client);
-//
-//
-//
-// void setup() {
-//   // put your setup code here, to run once:
-//   delay(2000);
-//   Serial.begin(115200);
-//
-//   // ... create thread to communciate with the world ...
-//
-//
-//   //
-//   //
-//   //   // ... connect to WIFI ...
-//   //   WiFi.mode(WIFI_STA);
-//   //   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-//   //
-//   //   while ( WiFi.status() != WL_CONNECTED ) {
-//   //     delay(500);
-//   //     Serial.print(".");
-//   //   }
-//   //
-//   //   // ... don´t know what this make, (this is for ESP32 can generate random numbers in feature) ...
-//   //   // randomSeed(micros());
-//   //
-//   //   Serial.println("\nWiFi connected\nIP address: ");
-//   //   Serial.println(WiFi.localIP());
-//   //
-//   //   while (!Serial) delay(1);
-//   //
-//   //   // ... init connection to MQTT server ...
-//   //   esp_client.setInsecure();
-//   //   mqtt_client.setServer(MQTT_SERVER, MQTT_PORT);
-//   //   mqtt_client.setCallback(callback);
-//   //
-//   //   // ... init sensor ...
-//   //   dht.begin();
-// }
-//
-// void loop() {
-//     // o loop corre no Core 1 por defeito
-//   Serial.println("Loop Arduino (Core 1)");
-//   delay(1000);
-//
-// //
-// //   // ... prepar payload to send ...
-// //   JsonDocument payload;
-// //   // payload["id"] = "CLIENT_1_PORTO";
-// //   payload["type"] = "wheatherObservation";
-// //   payload["location"] = "Porto";
-// //   payload["temperature"] = dht.readTemperature();
-// //   payload["relativeHumidity"] = dht.readHumidity();
-// //
-// //   // ... get current time of message ...
-// //   struct tm timeinfo;
-// //   getLocalTime(&timeinfo);
-// //   char data_iso[25];
-// //   strftime(data_iso, sizeof(data_iso), "%Y-%m-%dT%H:%M:%S", &timeinfo);
-// //   payload["dateObeserved"] = data_iso;
-// //   payload["id"] = String(payload["location"]) + "-" + String(payload["type"]) + "-" + String(data_iso);
-// //
-// //   // ... send data ...
-// //   String output;
-// //   serializeJson(payload, output);
-// //   publishMessage("/comcs/g11/temperature", output, true);
-// //
-// //
-// //   if ( !mqtt_client.connected() ) {
-// //     reconnect();
-// //   }
-// //   mqtt_client.loop();
-//
-//   // Serial.println("LUL");
-//
-//   // ... SEND DATA TO SERVER , IF SOME ERROR STORE INFORMATION IN FILE ...
-//   // delay(1000);
-// }
-//
-//
-//
-// //
-// //
-// // void reconnect() {
-// //   // Loop until we’re reconnected
-// //
-// //   while ( !mqtt_client.connected() ) {
-// //     Serial.print("Attempting MQTT connection…");
-// //     String clientId = "ESP32-G99-"; // change the groupID
-// //     clientId += String(random(0xffff), HEX);
-// //
-// //     // Attempt to connect
-// //     if (mqtt_client.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWORD)) {
-// //       Serial.println("connected");
-// //       mqtt_client.subscribe("/comcs/g11/temperature");// change topic for your group
-// //     } else {
-// //       Serial.print("failed, rc=");
-// //       Serial.print(mqtt_client.state());
-// //       Serial.println(" try again in 5 seconds"); // Wait 5 seconds before retrying
-// //       delay(5000);
-// //     }
-// //   }
-// // }
-// //
-// // void callback (char* topic, byte* payload, unsigned int length) {
-// //   Serial.print("Callback - ");
-// //   Serial.print("Message:");
-// //   for (int i = 0; i < length; i++) {
-// //     Serial.print((char)payload[i]);
-// //   }
-// //   Serial.println("");
-// // }
-// //
-// // void publishMessage (const char* topic, String payload, boolean retained) {
-// //   if (mqtt_client.publish(topic, payload.c_str(), true)) {
-// //     Serial.println("Message published ["+String(topic)+"]: "+payload);
-// //   } else {
-// //     Serial.println("Entrei no IF");
-// //   }
-// // }

@@ -125,6 +125,8 @@ void setup() {
 
   // ... init SPIFFS (file server) ...
   SPIFFS.begin(true);
+  spiffs_open_file();
+
 
   // ... create thread ...
   xTaskCreatePinnedToCore(
@@ -285,11 +287,12 @@ void mqtt_connect () {
 void spiffs_write_file (struct sensor_s data) {
 
   // ... open file ...
-  spiffs_open_file();
+  // spiffs_open_file();
 
   // ... write in file in specific position ...
   file.seek(err_write_idx * sizeof(data), SeekSet);
   file.write((uint8_t*) &data, sizeof(data));
+  file.flush(); 
 
   // ... increase value ...
   err_write_idx += 1;
@@ -299,17 +302,15 @@ void spiffs_write_file (struct sensor_s data) {
     err_write_idx = 0;
   }
 
-  file.close();
+  // file.close();
 
 }
 
 // ... read struct from file ...
 int spiffs_read_file (struct sensor_s *sensor) {
 
-  Serial.println("LER FICHEIRO ....");
-
   // ... open file ...
-  spiffs_open_file();
+  // spiffs_open_file();
 
   struct sensor_s empty = {0};
   int max_iterations = FILE_ARRAY_SIZE;
@@ -326,7 +327,7 @@ int spiffs_read_file (struct sensor_s *sensor) {
       // ... empty data of file ...
       file.seek(idx * sizeof(struct sensor_s), SeekSet);
       file.write((uint8_t*)&empty, sizeof(struct sensor_s));
-      Serial.println("DATA READ");
+      file.flush(); 
       return 0;
     }
 
@@ -338,7 +339,6 @@ int spiffs_read_file (struct sensor_s *sensor) {
 
   }
 
-  file.close();
   return 1;
 
 }

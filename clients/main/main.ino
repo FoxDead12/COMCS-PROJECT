@@ -209,6 +209,7 @@ void trhead_sender (void *pvParameters) {
       // ... send message to mqtt ...
       if ( mqtt_send_message(&output, &data) == 1 && error == 0) {
         spiffs_write_file(data);
+        error = 1;
       }
 
     } 
@@ -296,6 +297,8 @@ void mqtt_connect () {
 
 // ... write struct in file ...
 void spiffs_write_file (struct sensor_s data) {
+
+  Serial.println("  ^ mensagem nao enviada, ocorreu um erro");
 
   // ... open file ...
   // spiffs_open_file();

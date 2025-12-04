@@ -325,7 +325,7 @@ int spiffs_read_file (struct sensor_s *sensor) {
 
   struct sensor_s empty = {0};
   int max_iterations = FILE_ARRAY_SIZE;
-  int idx = err_write_idx;
+  int idx = err_write_idx + 1;
 
   for (int i = 0; i < FILE_ARRAY_SIZE; i++) {
 

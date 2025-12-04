@@ -175,7 +175,7 @@ void trhead_sender (void *pvParameters) {
   struct sensor_s data;
 
   while (true) {
-    if ( xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS || spiffs_read_file(&data) == 0) {
+    if ( spiffs_read_file(&data) == 0 || xQueueReceive(queue, &data, portMAX_DELAY) == pdPASS ) {
 
       // ... logic to dont write same message when errors append ...
       int error = 0;
